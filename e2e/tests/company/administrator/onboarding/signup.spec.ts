@@ -103,7 +103,7 @@ test.describe("External Provider signup", () => {
     expect(user.companyAdministrators).toHaveLength(1);
   });
 
-  test("signup with existing user email", async ({ page }) => {
+  test("signup with Google using existing user email", async ({ page }) => {
     const { user } = await usersFactory.create();
 
     await page.goto("/signup");
@@ -143,5 +143,21 @@ test.describe("External Provider signup", () => {
 
     expect(user.email).toBe(email);
     expect(user.companyAdministrators).toHaveLength(1);
+  });
+
+  test("signup with GitHub using existing user email", async ({ page }) => {
+    const { user } = await usersFactory.create();
+
+    await page.goto("/signup");
+
+    await externalProviderMock(page, String(SignInMethod.Github), { email: user.email });
+
+    await page.getByRole("button", { name: "Sign up with GitHub" }).click();
+
+    await page.waitForURL(/.*\/invoices.*/u);
+    await expect(page.getByRole("heading", { name: "Invoices" })).toBeVisible();
+    const updatedUser = await db.query.users.findFirst({ where: eq(users.id, user.id) });
+    expect(updatedUser?.currentSignInAt).not.toBeNull();
+    expect(updatedUser?.currentSignInAt).not.toBe(user.currentSignInAt);
   });
 });

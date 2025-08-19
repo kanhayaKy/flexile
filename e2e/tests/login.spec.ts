@@ -135,6 +135,25 @@ test("login with GitHub", async ({ page }) => {
   expect(updatedUser?.currentSignInAt).not.toBe(user.currentSignInAt);
 });
 
+test("login with GitHub and redirect_url", async ({ page }) => {
+  const { user } = await usersFactory.create();
+
+  await page.goto("/people");
+  await page.waitForURL(/\/login\?.*redirect_url=%2Fpeople/u);
+
+  await externalProviderMock(page, String(SignInMethod.Github), { email: user.email });
+
+  await page.getByRole("button", { name: "Log in with GitHub" }).click();
+  await page.waitForURL(/.*\/people.*/u);
+
+  await expect(page.getByRole("heading", { name: "People" })).toBeVisible();
+
+  await expect(page.getByText("Welcome back")).not.toBeVisible();
+  await expect(page.getByText("Use your work email to log in.")).not.toBeVisible();
+
+  expect(page.url()).toContain("/people");
+});
+
 test("login page should display OAuth error messages", async ({ page }) => {
   await page.goto("/login?error=Callback");
   await expect(page.getByText("Access denied or an unexpected error occurred.")).toBeVisible();
