@@ -9,7 +9,7 @@ import { login, logout } from "@test/helpers/auth";
 import { findRequiredTableRow } from "@test/helpers/matchers";
 import { expect, test, withinModal } from "@test/index";
 import { and, eq } from "drizzle-orm";
-import { companies, equityGrants, invoices } from "@/db/schema";
+import { companies, companyContractors, equityGrants, invoices } from "@/db/schema";
 
 type User = Awaited<ReturnType<typeof usersFactory.create>>["user"];
 type Company = Awaited<ReturnType<typeof companiesFactory.createCompletedOnboarding>>["company"];
@@ -95,38 +95,21 @@ test.describe("One-off payments", () => {
         );
       });
 
-      test("errors if the worker has no equity grant and the company does not have a share price", async ({ page }) => {
-        await db.update(companies).set({ fmvPerShareInUsd: null }).where(eq(companies.id, company.id));
-        await db.delete(equityGrants).where(eq(equityGrants.companyInvestorId, companyInvestor.id));
+      test("uses the contractor's configured equity percentage", async ({ page, sentEmails }) => {
+        await db
+          .update(companyContractors)
+          .set({ equityPercentage: 15 })
+          .where(eq(companyContractors.id, companyContractor.id));
 
-        await login(page, adminUser, `/people/${workerUser.externalId}?tab=invoices`);
-        await page.getByRole("button", { name: "Issue payment" }).click();
-
-        await withinModal(
-          async (modal) => {
-            await modal.getByLabel("Amount").fill("50000.00");
-            await modal.getByLabel("What is this for?").fill("Bonus payment for Q4");
-            await modal.getByLabel("Equity percentage", { exact: true }).fill("80");
-            await Promise.all([
-              page.waitForResponse((r) => r.url().includes("invoices.createAsAdmin") && r.status() === 400),
-              modal.getByRole("button", { name: "Issue payment" }).click(),
-            ]);
-            await expect(modal.getByText("Recipient has insufficient unvested equity")).toBeVisible();
-          },
-          { page, assertClosed: false },
-        );
-      });
-
-      test("with a fixed equity percentage", async ({ page, sentEmails }) => {
         await login(page, adminUser, `/people/${workerUser.externalId}?tab=invoices`);
 
         await page.getByRole("button", { name: "Issue payment" }).click();
 
         await withinModal(
           async (modal) => {
+            await expect(modal.getByText("will receive 15% equity")).toBeVisible();
             await modal.getByLabel("Amount").fill("500.00");
             await modal.getByLabel("What is this for?").fill("Bonus payment for Q4");
-            await modal.getByLabel("Equity percentage", { exact: true }).fill("10");
             await modal.getByRole("button", { name: "Issue payment" }).click();
           },
           { page },
@@ -139,10 +122,10 @@ test.describe("One-off payments", () => {
         expect(invoice).toEqual(
           expect.objectContaining({
             totalAmountInUsdCents: BigInt(50000),
-            equityPercentage: 10,
-            cashAmountInCents: BigInt(45000),
-            equityAmountInCents: BigInt(5000),
-            equityAmountInOptions: 5,
+            equityPercentage: 15,
+            cashAmountInCents: BigInt(42500),
+            equityAmountInCents: BigInt(7500),
+            equityAmountInOptions: 8,
             minAllowedEquityPercentage: null,
             maxAllowedEquityPercentage: null,
           }),
@@ -157,62 +140,34 @@ test.describe("One-off payments", () => {
         ]);
       });
 
-      test("with an allowed equity percentage range", async ({ page, sentEmails }) => {
-        await login(page, adminUser, `/people/${workerUser.externalId}?tab=invoices`);
+      test("errors if there is insufficient equity for the payment", async ({ page }) => {
+        await db
+          .update(companyContractors)
+          .set({ equityPercentage: 80 })
+          .where(eq(companyContractors.id, companyContractor.id));
 
+        await db.update(companies).set({ fmvPerShareInUsd: null }).where(eq(companies.id, company.id));
+        await db.delete(equityGrants).where(eq(equityGrants.companyInvestorId, companyInvestor.id));
+
+        await login(page, adminUser, `/people/${workerUser.externalId}?tab=invoices`);
         await page.getByRole("button", { name: "Issue payment" }).click();
 
         await withinModal(
           async (modal) => {
-            await modal.getByLabel("Amount").fill("500.00");
+            await expect(modal.getByText("will receive 80% equity")).toBeVisible();
+            await modal.getByLabel("Amount").fill("50000.00");
             await modal.getByLabel("What is this for?").fill("Bonus payment for Q4");
-            await modal.getByLabel("Equity percentage range").evaluate((x) => x instanceof HTMLElement && x.click()); // playwright breaks on the hidden radio inputs
-
-            // Move minimum thumb to 25%
-            const minThumb = modal.getByRole("slider", { name: "Minimum" });
-            await minThumb.focus();
-            await minThumb.press("Home"); // Start at 0%
-            // Move to 25% by pressing Arrow Right 25 times (assuming 1% per step)
-            for (let i = 0; i < 25; i++) {
-              await minThumb.press("ArrowRight");
-            }
-
-            // Move maximum thumb to 75%
-            const maxThumb = modal.getByRole("slider", { name: "Maximum" });
-            await maxThumb.focus();
-            await maxThumb.press("End"); // Start at 100%
-            // Move to 75% by pressing Arrow Left 25 times (from 100% to 75%)
-            for (let i = 0; i < 25; i++) {
-              await maxThumb.press("ArrowLeft");
-            }
-
             await modal.getByRole("button", { name: "Issue payment" }).click();
+
+            await expect(modal.getByText("Recipient has insufficient unvested equity")).toBeVisible();
           },
-          { page },
+          { page, assertClosed: false },
         );
 
         const invoice = await db.query.invoices.findFirst({
           where: and(eq(invoices.invoiceNumber, "O-0001"), eq(invoices.companyId, company.id)),
         });
-        expect(invoice?.acceptedAt).not.toBeNull();
-        expect(invoice).toEqual(
-          expect.objectContaining({
-            totalAmountInUsdCents: BigInt(50000),
-            equityPercentage: 25,
-            cashAmountInCents: BigInt(37500),
-            equityAmountInCents: BigInt(12500),
-            equityAmountInOptions: 13,
-            minAllowedEquityPercentage: 25,
-            maxAllowedEquityPercentage: 75,
-          }),
-        );
-        expect(sentEmails).toEqual([
-          expect.objectContaining({
-            to: workerUser.email,
-            subject: `${company.name} has sent you money`,
-            text: expect.stringContaining("has sent you money"),
-          }),
-        ]);
+        expect(invoice).toBeUndefined();
       });
     });
   });

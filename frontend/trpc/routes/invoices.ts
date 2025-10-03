@@ -63,44 +63,10 @@ const getFlexileFeeCents = (totalAmountCents: bigint) => {
   return feeCents > MAX_FLEXILE_FEE_CENTS ? MAX_FLEXILE_FEE_CENTS : feeCents;
 };
 
-const invoiceInputSchema = createInsertSchema(invoiceLineItems)
-  .pick({ description: true })
-  .extend({
-    userExternalId: z.string(),
-    totalAmountCents: z.bigint(),
-    ...createInsertSchema(invoices).pick({
-      equityPercentage: true,
-      minAllowedEquityPercentage: true,
-      maxAllowedEquityPercentage: true,
-    }).shape,
-  })
-  .refine(
-    (data) =>
-      !data.minAllowedEquityPercentage ||
-      !data.maxAllowedEquityPercentage ||
-      data.minAllowedEquityPercentage <= data.maxAllowedEquityPercentage,
-    {
-      message: "Minimum equity percentage must be less than or equal to maximum equity percentage",
-    },
-  )
-  .refine(
-    (data) =>
-      !data.minAllowedEquityPercentage ||
-      (data.minAllowedEquityPercentage >= MINIMUM_EQUITY_PERCENTAGE &&
-        data.minAllowedEquityPercentage <= MAXIMUM_EQUITY_PERCENTAGE),
-    {
-      message: `Minimum equity percentage must be between ${MINIMUM_EQUITY_PERCENTAGE} and ${MAXIMUM_EQUITY_PERCENTAGE}`,
-    },
-  )
-  .refine(
-    (data) =>
-      !data.maxAllowedEquityPercentage ||
-      (data.maxAllowedEquityPercentage >= MINIMUM_EQUITY_PERCENTAGE &&
-        data.maxAllowedEquityPercentage <= MAXIMUM_EQUITY_PERCENTAGE),
-    {
-      message: `Maximum equity percentage must be between ${MINIMUM_EQUITY_PERCENTAGE} and ${MAXIMUM_EQUITY_PERCENTAGE}`,
-    },
-  );
+const invoiceInputSchema = createInsertSchema(invoiceLineItems).pick({ description: true }).extend({
+  userExternalId: z.string(),
+  totalAmountCents: z.bigint(),
+});
 
 export const invoicesRouter = createRouter({
   createAsAdmin: companyProcedure.input(invoiceInputSchema).mutation(async ({ ctx, input }) => {
@@ -143,7 +109,7 @@ export const invoicesRouter = createRouter({
         companyContractor: companyWorker,
         serviceAmountCents: Number(totalAmountCents),
         invoiceYear: dateToday.getFullYear(),
-        providedEquityPercentage: values.equityPercentage,
+        providedEquityPercentage: companyWorker.equityPercentage,
       });
 
       if (!equityResult) {
@@ -153,7 +119,7 @@ export const invoicesRouter = createRouter({
         });
       }
 
-      if (equityResult.equityPercentage !== values.equityPercentage) {
+      if (equityResult.equityPercentage !== companyWorker.equityPercentage) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "No options would be granted" });
       }
 
